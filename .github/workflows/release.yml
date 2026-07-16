@@ -1,0 +1,52 @@
+name: Build and Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Compile resources
+        run: rc /nologo app.rc
+
+      - name: Compile
+        run: >
+          cl /nologo /O2 /EHsc /W3 /DUNICODE /D_UNICODE main.cpp app.res
+          /link /SUBSYSTEM:WINDOWS gdiplus.lib user32.lib gdi32.lib
+          shell32.lib advapi32.lib comdlg32.lib ole32.lib
+          /OUT:MouseTrail.exe
+
+      - name: Package
+        run: Compress-Archive -Path MouseTrail.exe -DestinationPath MouseTrail-Windows.zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MouseTrail-Windows
+          path: MouseTrail.exe
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: MouseTrail-Windows.zip
+          name: Mouse Trail for Windows ${{ github.ref_name }}
+          body: |
+            A tiny Windows tray app that draws a colorful trail behind your mouse cursor. 🌈
+
+            **Install:** download `MouseTrail-Windows.zip` below, unzip, and run **MouseTrail.exe** — no installer needed. Windows SmartScreen will warn about an unrecognized app (it isn't code-signed — this is a free hobby project); click **More info → Run anyway**. Right-click the tray icon to change style, color, thickness, and trail length, or to make it start with Windows.
+
+            This binary was built from the public source by GitHub Actions — see the checked-in workflow.
+
+            Requires Windows 10 or later (64-bit).
