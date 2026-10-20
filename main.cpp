@@ -209,6 +209,27 @@ static Bitmap*   g_bitmap = nullptr;
 static Graphics* g_graphics = nullptr;
 static int       g_vx, g_vy, g_vw, g_vh;   // virtual screen bounds
 static bool      g_lastFrameEmpty = true;
+static RECT      g_drawnRect = {};         // surface area holding last frame's pixels
+static RECT      g_frameRect = {};         // surface area drawn so far this frame
+static bool      g_fullUpdate = true;      // next frame must push the whole surface
+
+/**
+ * Grows g_frameRect to cover the given area, clipped to the surface.
+ * Lets RenderFrame clear and push only the pixels the trail touched.
+ * @param x0 left edge, inclusive
+ * @param y0 top edge, inclusive
+ * @param x1 right edge, exclusive
+ * @param y1 bottom edge, exclusive
+ */
+static void MarkDrawn(int x0, int y0, int x1, int y1) {
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > g_vw) x1 = g_vw;
+    if (y1 > g_vh) y1 = g_vh;
+    if (x1 <= x0 || y1 <= y0) return;
+    RECT area = { x0, y0, x1, y1 };
+    UnionRect(&g_frameRect, &g_frameRect, &area);
+}
 
 static void DestroySurface() {
     delete g_graphics; g_graphics = nullptr;
@@ -241,6 +262,9 @@ static bool CreateSurface() {
     g_dib = CreateDIBSection(g_memDC, &bmi, DIB_RGB_COLORS, &g_dibBits, nullptr, 0);
     if (!g_dib) { DeleteDC(g_memDC); g_memDC = nullptr; return false; }
     g_dibOld = (HBITMAP)SelectObject(g_memDC, g_dib);
+    ZeroMemory(g_dibBits, (size_t)g_vw * g_vh * 4);
+    SetRectEmpty(&g_drawnRect);
+    g_fullUpdate = true;
 
     g_bitmap = new Bitmap(g_vw, g_vh, g_vw * 4, PixelFormat32bppPARGB, (BYTE*)g_dibBits);
     g_graphics = new Graphics(g_bitmap);
@@ -431,6 +455,7 @@ static void DrawTrailPass(const std::vector<TrailPt>& pts, double now, double li
     if (by1 > g_vh - 1) by1 = g_vh - 1;
     if (bx1 < bx0 || by1 < by0) return;
     int bw = bx1 - bx0 + 1, bh = by1 - by0 + 1;
+    MarkDrawn(bx0, by0, bx1 + 1, by1 + 1);
 
     if (g_scratch.size() < (size_t)bw * bh) g_scratch.resize((size_t)bw * bh, 0);
     g_spanMin.assign(bh, bw);
@@ -533,6 +558,9 @@ static void DrawCometStyle(double now, double lifetime) {
     for (const Halo& h : halos) {
         SolidBrush brush(TrailColor(h.alpha, h.whiten));
         g_graphics->FillEllipse(&brush, c.X - h.radius, c.Y - h.radius, h.radius * 2, h.radius * 2);
+        //? +2 px covers GDI+ anti-aliasing outside the ellipse.
+        MarkDrawn((int)floorf(c.X - h.radius) - 2, (int)floorf(c.Y - h.radius) - 2,
+                  (int)ceilf(c.X + h.radius) + 2, (int)ceilf(c.Y + h.radius) + 2);
     }
 }
 
@@ -545,21 +573,49 @@ static void RenderFrame() {
     double now = Now();
     double lifetime = g_settings.durationMs / 1000.0;
 
-    g_graphics->Clear(Color(0, 0, 0, 0));
-    g_graphics->Flush(FlushIntentionSync);   //? DrawTrailPass writes g_dibBits directly
+    //? Only last frame's area can hold pixels, so clearing it replaces a full-surface Clear.
+    DWORD* dib = (DWORD*)g_dibBits;
+    for (LONG y = g_drawnRect.top; y < g_drawnRect.bottom; y++) {
+        ZeroMemory(dib + (size_t)y * g_vw + g_drawnRect.left,
+                   (size_t)(g_drawnRect.right - g_drawnRect.left) * 4);
+    }
+
+    SetRectEmpty(&g_frameRect);
     switch (g_settings.style) {
         case STYLE_LINE:  DrawLineStyle(now, lifetime); break;
         case STYLE_COMET: DrawCometStyle(now, lifetime); break;
     }
     g_graphics->Flush(FlushIntentionSync);
 
+    //* Push only what changed: last frame's area (now cleared) plus this frame's.
+    RECT dirty;
+    UnionRect(&dirty, &g_drawnRect, &g_frameRect);
+    if (g_fullUpdate) SetRect(&dirty, 0, 0, g_vw, g_vh);
+    g_drawnRect = g_frameRect;
+    g_fullUpdate = false;
+    if (IsRectEmpty(&dirty)) return;
+
+    //? Other topmost windows (taskbar, Task Manager) take the top spot whenever they're raised;
+    //? claim it back each drawn frame so the trail stays above them.
+    if (GetWindow(g_overlay, GW_HWNDPREV)) {
+        SetWindowPos(g_overlay, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    }
+
     POINT src = { 0, 0 };
     POINT dst = { g_vx, g_vy };
     SIZE  size = { g_vw, g_vh };
     BLENDFUNCTION blend = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
-    HDC screen = GetDC(nullptr);
-    UpdateLayeredWindow(g_overlay, screen, &dst, &size, g_memDC, &src, 0, &blend, ULW_ALPHA);
-    ReleaseDC(nullptr, screen);
+    UPDATELAYEREDWINDOWINFO info = {};
+    info.cbSize = sizeof(info);
+    info.pptDst = &dst;
+    info.psize = &size;
+    info.hdcSrc = g_memDC;
+    info.pptSrc = &src;
+    info.pblend = &blend;
+    info.dwFlags = ULW_ALPHA;
+    info.prcDirty = &dirty;
+    UpdateLayeredWindowIndirect(g_overlay, &info);
 }
 
 // --------------------------------------------------------------- tray menu
