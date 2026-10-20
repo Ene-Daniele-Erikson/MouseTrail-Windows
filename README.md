@@ -57,6 +57,15 @@ focuses on a smoother trail and a smaller set of options.
   lines between samples. The app now reads every mouse position Windows
   recorded between ticks with `GetMouseMovePointsEx`, falling back to
   `GetCursorPos` when the history isn't available.
+- **Stays above the taskbar.** The overlay re-claims the top spot
+  whenever another always-on-top window (the taskbar, Task Manager)
+  is raised above it. The Start menu, Search, notifications and
+  Alt-Tab live in system layers above every app window, so they still
+  cover the trail.
+- **Redraws only what changed.** The original cleared and uploaded the
+  whole virtual screen every frame. Each frame now clears and pushes
+  only the area the trail touched, which cuts CPU and memory bandwidth
+  sharply on large or multi-monitor setups.
 - **Default color is red** (`#FF0000`). It's saved under a new `Color`
   registry value, so colors saved by the original app are ignored.
 
