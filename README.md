@@ -5,7 +5,7 @@
 <h1 align="center">Mouse Trail for Windows</h1>
 
 <p align="center">
-  A tiny Windows tray app that draws a colorful trail behind your mouse cursor.<br>
+  A tiny Windows tray app that draws a smooth trail behind your mouse cursor.<br>
   Free, open source, no ads, no data collection.<br>
   <em>On a Mac? Get the <a href="https://github.com/changymon/MouseTrail">macOS version</a>.</em>
 </p>
@@ -29,13 +29,54 @@ If it helps you the way it helps me, that's the whole point. 🌈
 
 ## Features
 
-- **Three styles** — clean **Line**, glowing **Comet**, or twinkling **Sparkles**
-- **Any color** — rainbow mode, nine presets, or a custom color picker
+- **Two styles** — clean **Line** or glowing **Comet**
+- **Smooth, continuous trail** — follows every mouse movement, even at high polling rates
+- **Any color** — pick it with the color picker (red by default)
 - Adjustable **thickness** and **trail length**
 - Works across **multiple displays**, never blocks a click
 - Lives in the **system tray**, remembers your settings
 - Optional **start with Windows**
 - A single small `.exe` — no installer, no runtime, no network access
+
+## Changes in this fork
+
+This fork of [changymon/MouseTrail-Windows](https://github.com/changymon/MouseTrail-Windows)
+focuses on a smoother trail and a smaller set of options.
+
+### Changed
+
+- **Trail is drawn as one continuous stroke.** The original drew each
+  segment as its own semi-transparent line with round caps, so the
+  overlapping caps showed up as darker dots at every joint. The trail
+  is now rasterized directly into the overlay: each pixel takes the
+  strongest coverage of any segment touching it instead of stacking
+  alphas, so there are no overlap artifacts and the fade and taper stay
+  smooth.
+- **Fast movement no longer draws polygons.** The original read the
+  cursor once per timer tick (~64 Hz), so fast curves became straight
+  lines between samples. The app now reads every mouse position Windows
+  recorded between ticks with `GetMouseMovePointsEx`, falling back to
+  `GetCursorPos` when the history isn't available.
+- **Default color is red** (`#FF0000`). It's saved under a new `Color`
+  registry value, so colors saved by the original app are ignored.
+
+### Added
+
+- **Spline smoothing.** Points are fitted with a centripetal
+  Catmull-Rom spline and resampled every 3 px, so curves stay round
+  even when the mouse moves quickly.
+- **Bump removal at high polling rates.** Integer 1–2 px mouse steps
+  used to show up as a wavy, staircase-like trail. New points are only
+  fixed once they're at least 4 px from the previous one (the head
+  still follows the cursor exactly), and two light averaging passes
+  round off what's left.
+
+### Removed
+
+- **Sparkles** style (Line and Comet remain).
+- **Rainbow mode and the nine color presets.** Color is now a single
+  **Color…** item that opens the color picker.
+- **Pause / Resume Trail** menu item.
 
 ## Install
 
